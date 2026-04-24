@@ -1,0 +1,61 @@
+# ===================================
+# Render.com 免费容器部署配置
+# ===================================
+# 使用方式：
+#   1. Fork/使用本仓库
+#   2. 在 Render.com 导入此仓库
+#   3. Render 会自动读取此文件完成部署
+#   4. 在环境变量中设置 NVIDIA_API_KEY
+
+services:
+  - type: web
+    name: daily-stock-analysis
+    runtime: docker
+
+    # 指定 Docker 镜像（从 GHCR 拉取）
+    # Render 会自动检测 docker-compose / Dockerfile，这里指定从 GHCR 拉取预构建镜像
+    dockerContext: .
+    dockerfilePath: ./docker/Dockerfile
+
+    # 实例规格（免费版限制：512MB RAM, 0.1 CPU）
+    plan: free
+    region: oregon  # 美国俄勒冈（免费层支持的区域）
+
+    # 环境变量（Render Dashboard 中也可设置 Secrets）
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: TZ
+        value: Asia/Shanghai
+      - key: WEBUI_HOST
+        value: 0.0.0.0
+      - key: API_PORT
+        value: 10000
+      # AI 模型配置（NVIDIA API）
+      - key: LLM_CHANNELS
+        value: custom_nvidia
+      - key: LLM_CUSTOM_NVIDIA_PROTOCOL
+        value: openai
+      - key: LLM_CUSTOM_NVIDIA_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      # NVIDIA_API_KEY 需要在 Render Dashboard 的 Secrets 中设置
+      - key: NVIDIA_API_KEY
+        sync: false  # 从 Render Secret 获取，不硬编码
+      - key: LITELLM_MODEL
+        value: openai/deepseek-ai/deepseek-v3.2
+
+    # 健康检查路径
+    healthCheckPath: /api/health
+
+    # 启动命令：纯 Web 服务模式
+    command:
+      - python
+      - main.py
+      - --serve-only
+      - --host
+      - 0.0.0.0
+      - --port
+      - "10000"
+
+    # 实例数量
+    numInstances: 1
