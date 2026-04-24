@@ -4,9 +4,6 @@
 # 触发方式：
 #   1. push 到 main 分支时自动构建 Docker 镜像并推送到 GHCR
 #   2. 手动触发（workflow_dispatch）
-# 部署方式：
-#   - 构建 Docker 镜像 → 推送到 GitHub Container Registry (GHCR)
-#   - 用户通过 docker pull 运行，或使用 GitHub Codespaces
 
 name: 🚀 Deploy Web App
 
@@ -51,43 +48,50 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.image_tag }}" ]; then
             TAG="${{ inputs.image_tag }}"
+            TAGS="${TAG}"
           else
-            TAG="latest"
             SHORT_SHA=$(git rev-parse --short HEAD)
             DATE=$(date +%Y%m%d)
-            TAG="${TAG},${DATE}-${SHORT_SHA}"
+            TAGS="latest,${DATE}-${SHORT_SHA}"
           fi
-          echo "tags=${TAG}" >> $GITHUB_OUTPUT
-          echo "📦 镜像标签: ${TAG}"
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "📦 镜像标签: ${TAGS}"
 
       - name: 🐳 Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 🔐 登录到 GHCR
+      - name: 🔐 登录到 GHCR（仅推送目标，不登录 Docker Hub）
         uses: docker/login-action@v3
         with:
           registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 🏗️ 构建并推送镜像
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile
-          push: true
-          platforms: linux/amd64
-          tags: |
-            ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:${{ steps.meta.outputs.tags }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
-            org.opencontainers.image.description="A股自选股智能分析系统"
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            BUILDKIT_INLINE_CACHE=1
+      # 核心修复：使用原生 docker buildx build 而非 build-push-action
+      # 避免 build-push-action 内部自动尝试用 GITHUB_TOKEN 认证 Docker Hub 导致 401
+      - name: 🏗️ 构建并推送 Docker 镜像
+        run: |
+          echo "📦 开始构建镜像..."
+          
+          IFS=',' read -ra TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
+          TAG_ARGS=""
+          for tag in "${TAG_ARRAY[@]}"; do
+            TAG_ARGS="${TAG_TAGS} -t ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:${tag}"
+          done
+          
+          echo "标签参数: ${TAG_ARGS}"
+          
+          docker buildx build \
+            --push \
+            --platform linux/amd64 \
+            --file docker/Dockerfile \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.description=A股自选股智能分析系统" \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            ${TAG_ARGS} \
+            .
 
       - name: 📋 输出部署信息
         run: |
@@ -104,7 +108,6 @@ jobs:
           echo "  --restart unless-stopped \\" >> $GITHUB_STEP_SUMMARY
           echo "  -p 8888:8000 \\" >> $GITHUB_STEP_SUMMARY
           echo "  -e WEBUI_HOST=0.0.0.0 \\" >> $GITHUB_STEP_SUMMARY
-          echo "  -e API_PORT=8000 \\" >> $GITHUB_STEP_SUMMARY
           echo "  -e LLM_CHANNELS=custom_nvidia \\" >> $GITHUB_STEP_SUMMARY
           echo "  -e LLM_CUSTOM_NVIDIA_PROTOCOL=openai \\" >> $GITHUB_STEP_SUMMARY
           echo "  -e LLM_CUSTOM_NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1 \\" >> $GITHUB_STEP_SUMMARY
@@ -118,5 +121,3 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "#### 🌐 访问地址" >> $GITHUB_STEP_SUMMARY
           echo "启动后访问: **http://localhost:8888**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> ⚠️ **注意**: 首次运行需要在 GitHub 仓库 Settings > Secrets 中配置 \`NVIDIA_API_KEY\`" >> $GITHUB_STEP_SUMMARY
